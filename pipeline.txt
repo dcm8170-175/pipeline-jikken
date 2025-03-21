@@ -1,0 +1,279 @@
+[dcm8170@ip-172-31-24-157 backup_sework]$ oc get pipeline sample-blog-pipeline-oc -o yaml
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  creationTimestamp: "2025-03-07T05:42:03Z"
+  generation: 48
+  name: sample-blog-pipeline-oc
+  namespace: sample-blog-20250306
+  resourceVersion: "27370051"
+  uid: 21d03a99-f1f3-49ca-b8fa-5910bf0a08da
+spec:
+  params:
+  - default: nginx
+    name: IMAGE_NAME_NGINX
+    type: string
+  - default: http://54.64.26.116/kaneko_gitlab/sample-nginx.git
+    name: GIT_REPO_NGINX
+    type: string
+  - default: main
+    name: GIT_REVISION_NGINX
+    type: string
+  - default: django
+    name: IMAGE_NAME_DJANGO
+    type: string
+  - default: http://54.64.26.116/kaneko_gitlab/sample-django.git
+    name: GIT_REPO_DJANGO
+    type: string
+  - default: main
+    name: GIT_REVISION_DJANGO
+    type: string
+  - default: http://54.64.26.116/kaneko_gitlab/sample-mani.git
+    name: GIT_REPO_MANIFEST
+    type: string
+  - default: main
+    name: GIT_REVISION_MANIFEST
+    type: string
+  - default: ./
+    name: APPLY_DIR_MANIFEST
+    type: string
+  - default: kaneko_gitlab
+    name: GIT_PUSH_USER
+    type: string
+  - default: kaneko_user@gitlab.gitlab
+    name: GIT_PUSH_MAIL
+    type: string
+  - default: http://54.64.26.116/kaneko_gitlab/sample-mani-origin.git
+    name: GIT_REPO_PUSH
+    type: string
+  - default: main
+    name: GIT_REVISION_PUSH
+    type: string
+  tasks:
+  - name: fetch-repository-nginx
+    params:
+    - name: URL
+      value: $(params.GIT_REPO_NGINX)
+    - name: REVISION
+      value: $(params.GIT_REVISION_NGINX)
+    - name: SUBDIRECTORY
+      value: ""
+    - name: DELETE_EXISTING
+      value: "true"
+    - name: sslVerify
+      value: "false"
+    taskRef:
+      params:
+      - name: kind
+        value: task
+      - name: name
+        value: git-clone
+      - name: namespace
+        value: openshift-pipelines
+      resolver: cluster
+    workspaces:
+    - name: output
+      workspace: shared-workspace-nginx
+  - name: fetch-repository-django
+    params:
+    - name: URL
+      value: $(params.GIT_REPO_DJANGO)
+    - name: REVISION
+      value: $(params.GIT_REVISION_DJANGO)
+    - name: SUBDIRECTORY
+      value: ""
+    - name: DELETE_EXISTING
+      value: "true"
+    - name: sslVerify
+      value: "false"
+    taskRef:
+      params:
+      - name: kind
+        value: task
+      - name: name
+        value: git-clone
+      - name: namespace
+        value: openshift-pipelines
+      resolver: cluster
+    workspaces:
+    - name: output
+      workspace: shared-workspace-django
+  - name: new-build-nginx
+    params:
+    - name: SCRIPT
+      value: oc new-build --name=$(params.IMAGE_NAME_NGINX) --strategy=docker --binary
+    - name: VERSION
+      value: "4.7"
+    runAfter:
+    - fetch-repository-nginx
+    taskRef:
+      kind: Task
+      name: openshift-client
+  - name: start-build-nginx
+    params:
+    - name: SCRIPT
+      value: oc start-build $(params.IMAGE_NAME_NGINX) --from-dir=./
+    - name: VERSION
+      value: "4.7"
+    runAfter:
+    - new-build-nginx
+    taskRef:
+      kind: Task
+      name: openshift-client
+    workspaces:
+    - name: manifest-dir
+      workspace: shared-workspace-nginx
+  - name: new-build-django
+    params:
+    - name: SCRIPT
+      value: oc new-build --name=$(params.IMAGE_NAME_DJANGO) --strategy=docker --binary
+    - name: VERSION
+      value: "4.7"
+    runAfter:
+    - fetch-repository-django
+    taskRef:
+      kind: Task
+      name: openshift-client
+  - name: start-build-django
+    params:
+    - name: SCRIPT
+      value: oc start-build $(params.IMAGE_NAME_DJANGO) --from-dir=./
+    - name: VERSION
+      value: "4.7"
+    runAfter:
+    - new-build-django
+    taskRef:
+      kind: Task
+      name: openshift-client
+    workspaces:
+    - name: manifest-dir
+      workspace: shared-workspace-django
+  - name: fetch-repository-mani
+    params:
+    - name: URL
+      value: $(params.GIT_REPO_MANIFEST)
+    - name: REVISION
+      value: $(params.GIT_REVISION_MANIFEST)
+    - name: SUBDIRECTORY
+      value: ""
+    - name: DELETE_EXISTING
+      value: "true"
+    - name: sslVerify
+      value: "false"
+    runAfter:
+    - start-build-nginx
+    - start-build-django
+    taskRef:
+      params:
+      - name: kind
+        value: task
+      - name: name
+        value: git-clone
+      - name: namespace
+        value: openshift-pipelines
+      resolver: cluster
+    workspaces:
+    - name: output
+      workspace: shared-workspace
+  - name: applymani-depoly
+    params:
+    - name: SCRIPT
+      value: oc apply -k $(params.APPLY_DIR_MANIFEST)
+    - name: VERSION
+      value: "4.7"
+    runAfter:
+    - fetch-repository-mani
+    taskRef:
+      kind: Task
+      name: openshift-client
+    workspaces:
+    - name: manifest-dir
+      workspace: shared-workspace
+  - name: oc-get-all-delete-django
+    params:
+    - name: SCRIPT
+      value: oc get all
+    - name: VERSION
+      value: "4.7"
+    runAfter:
+    - delete-pod-django
+    taskRef:
+      kind: Task
+      name: openshift-client
+  - name: delete-pod-django
+    params:
+    - name: SCRIPT
+      value: oc delete pod $(oc get pod --no-headers -o custom-columns=":metadata.name"
+        | grep django | grep -v build | grep -v pipeline)
+    - name: VERSION
+      value: "4.7"
+    runAfter:
+    - oc-get-all-deploy
+    taskRef:
+      kind: Task
+      name: openshift-client
+  - name: oc-get-all-deploy
+    params:
+    - name: SCRIPT
+      value: sleep 30; oc get all
+    - name: VERSION
+      value: "4.7"
+    runAfter:
+    - applymani-depoly
+    taskRef:
+      kind: Task
+      name: openshift-client
+  - name: oc-get-resourses
+    params:
+    - name: SCRIPT
+      value: oc get deployment.apps/django -o yaml > django_dep_mani.yaml | oc get
+        service/django -o yaml > django_sv_mani.yaml | oc get configmap/django-configmap
+        -o yaml > django_cm_mani.yaml | oc get secret/django-secret -o yaml > django_sec_mani.yaml
+        | oc get deployment.apps/nginx -o yaml > nginx_dep_mani.yaml | oc get service/nginx
+        -o yaml > nginx_sv_mani.yaml | oc get route.route.openshift.io/nginx -o yaml
+        > nginx_route_mani.yaml | oc get deployment.apps/mysql -o yaml > mysql_dep_mani.yaml
+        | oc get service/mysql -o yaml > mysql_sv_mani.yaml | oc get secret/mysql-secret
+        -o yaml > mysql_sec_mani.yaml | oc get deployment.apps/redis -o yaml > redis_dep_mani.yaml
+        | oc get service/redis -o yaml > redis_sv_mani.yaml | oc get secret/private-image-pull-secret
+        -o yaml > private-image-pull-secret_mani.yaml
+    - name: VERSION
+      value: "4.7"
+    runAfter:
+    - oc-get-all-delete-django
+    taskRef:
+      kind: Task
+      name: openshift-client
+    workspaces:
+    - name: manifest-dir
+      workspace: shared-workspace
+  - name: git-push
+    params:
+    - name: BASE_IMAGE
+      value: cgr.dev/chainguard/git:root-2.39@sha256:7759f87050dd8bacabe61354d75ccd7f864d6b6f8ec42697db7159eccd491139
+    - name: GIT_USER_NAME
+      value: $(params.GIT_PUSH_USER)
+    - name: GIT_USER_EMAIL
+      value: $(params.GIT_PUSH_MAIL)
+    - name: GIT_SCRIPT
+      value: "git config --global --add safe.directory /workspace/source; git config
+        \ branch.main.remote origin; git branch $(params.GIT_REVISION_PUSH); \n git
+        checkout $(params.GIT_REVISION_PUSH); git fetch --unshallow; git remote set-url
+        origin $(params.GIT_REPO_PUSH); git config --list ; git add . ; git commit
+        -m \"push manifest via pipeline\"; git push -uf origin $(params.GIT_REVISION_PUSH)"
+    - name: USER_HOME
+      value: /root
+    - name: VERBOSE
+      value: "true"
+    runAfter:
+    - oc-get-resourses
+    taskRef:
+      kind: Task
+      name: git-cli
+    workspaces:
+    - name: source
+      workspace: shared-workspace
+  workspaces:
+  - name: shared-workspace-nginx
+  - name: shared-workspace-django
+  - name: shared-workspace
+[dcm8170@ip-172-31-24-157 backup_sework]$
